@@ -1,0 +1,86 @@
+package main
+
+import (
+	"log"
+	"net/http"
+	"os"
+
+	"github.com/gin-gonic/gin"
+)
+
+func main() {
+	// Configurar Gin
+	if os.Getenv("ENVIRONMENT") == "production" {
+		gin.SetMode(gin.ReleaseMode)
+	}
+
+	router := gin.Default()
+
+	// Middleware para CORS
+	router.Use(func(c *gin.Context) {
+		c.Header("Access-Control-Allow-Origin", "*")
+		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+		if c.Request.Method == "OPTIONS" {
+			c.AbortWithStatus(204)
+			return
+		}
+		c.Next()
+	})
+
+	// Ruta de salud
+	router.GET("/health", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"status":  "ok",
+			"service": "search-service",
+			"version": "1.0.0",
+		})
+	})
+
+	// Ruta de búsqueda básica
+	router.GET("/api/v1/search/hotels", func(c *gin.Context) {
+		city := c.Query("city")
+		if city == "" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "El parámetro 'city' es obligatorio",
+			})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"message": "Search service funcionando - búsqueda básica",
+			"data": gin.H{
+				"hotels": []gin.H{
+					{
+						"id":          "demo-1",
+						"name":        "Hotel Demo " + city,
+						"description": "Hotel de demostración en " + city,
+						"city":        city,
+						"available":   true,
+					},
+				},
+				"total":       1,
+				"page":        1,
+				"page_size":   20,
+				"total_pages": 1,
+			},
+			"search_params": gin.H{
+				"city": city,
+			},
+		})
+	})
+
+	// Obtener puerto
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	log.Printf("🔍 Search Service (versión básica) iniciando en puerto %s", port)
+	
+	if err := http.ListenAndServe(":"+port, router); err != nil {
+		log.Fatalf("Error iniciando servidor: %v", err)
+	}
+}

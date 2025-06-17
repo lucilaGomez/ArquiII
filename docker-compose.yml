@@ -1,0 +1,125 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:6.0
+    container_name: hotel_mongodb
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: password123
+      MONGO_INITDB_DATABASE: hotels_db
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - hotel_network
+
+  mysql:
+    image: mysql:8.0
+    container_name: hotel_mysql
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: booking_db
+      MYSQL_USER: booking_user
+      MYSQL_PASSWORD: booking_pass
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./booking-service/sql:/docker-entrypoint-initdb.d
+    networks:
+      - hotel_network
+
+  rabbitmq:
+    image: rabbitmq:3.11-management
+    container_name: hotel_rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: admin123
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - hotel_network
+
+  solr:
+    image: solr:9.2
+    container_name: hotel_solr
+    ports:
+      - "8983:8983"
+    environment:
+      SOLR_HEAP: 1g
+    volumes:
+      - solr_data:/var/solr
+    command: solr-precreate hotels
+    networks:
+      - hotel_network
+
+  memcached:
+    image: memcached:1.6-alpine
+    container_name: hotel_memcached
+    ports:
+      - "11211:11211"
+    networks:
+      - hotel_network
+
+  hotel-service:
+    build: ./hotel-service
+    container_name: hotel_service
+    ports:
+      - "8001:8080"
+    environment:
+      - MONGODB_URI=mongodb://admin:password123@mongodb:27017/hotels_db?authSource=admin
+      - RABBITMQ_URI=amqp://admin:admin123@rabbitmq:5672/
+      - PORT=8080
+    depends_on:
+      - mongodb
+      - rabbitmq
+    networks:
+      - hotel_network
+
+  search-service:
+    build: ./search-service
+    container_name: search_service
+    ports:
+      - "8002:8080"
+    environment:
+      - SOLR_URI=http://solr:8983/solr/hotels
+      - RABBITMQ_URI=amqp://admin:admin123@rabbitmq:5672/
+      - HOTEL_SERVICE_URI=http://hotel-service:8080
+      - PORT=8080
+    depends_on:
+      - solr
+      - rabbitmq
+      - hotel-service
+    networks:
+      - hotel_network
+
+  booking-service:
+    build: ./booking-service
+    container_name: booking_service
+    ports:
+      - "8003:8080"
+    environment:
+      - MYSQL_URI=booking_user:booking_pass@tcp(mysql:3306)/booking_db
+      - MEMCACHED_URI=memcached:11211
+      - PORT=8080
+      - JWT_SECRET=mi-secreto-super-seguro-2024
+    depends_on:
+      - mysql
+      - memcached
+    networks:
+      - hotel_network
+
+volumes:
+  mongodb_data:
+  mysql_data:
+  rabbitmq_data:
+  solr_data:
+
+networks:
+  hotel_network:
+    driver: bridge
