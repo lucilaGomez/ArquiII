@@ -15,9 +15,9 @@ import (
 )
 
 type SearchService struct {
-	solrClient      *solr.Client
-	rabbitConsumer  *rabbitmq.Consumer
-	httpClient      *http.Client
+	solrClient     *solr.Client
+	rabbitConsumer *rabbitmq.Consumer
+	httpClient     *http.Client
 }
 
 type AvailabilityResult struct {
@@ -39,7 +39,7 @@ func NewSearchService(solrClient *solr.Client, rabbitConsumer *rabbitmq.Consumer
 
 func (s *SearchService) StartEventConsumer() error {
 	log.Println("🚀 Iniciando consumer de eventos de hoteles...")
-	
+
 	return s.rabbitConsumer.StartConsuming(func(event rabbitmq.HotelEvent) error {
 		return s.syncHotelToSolr(event)
 	})
@@ -48,22 +48,67 @@ func (s *SearchService) StartEventConsumer() error {
 func (s *SearchService) syncHotelToSolr(event rabbitmq.HotelEvent) error {
 	log.Printf("🔄 Sincronizando hotel %s en Solr (evento: %s)", event.HotelID, event.Type)
 
+	// CORREGIDO: Los eventos llegan con formato "hotel.created", "hotel.updated", etc.
 	switch event.Type {
-	case "created", "updated":
+	case "hotel.created", "hotel.updated": // ✅ AGREGADO "hotel." prefix
+		// PROBLEMA ADICIONAL: Si el evento no incluye datos completos del hotel,
+		// necesitamos hacer GET al hotel-service según las consignas
+
+		var hotelData struct {
+			ID          string   `json:"id"`
+			Name        string   `json:"name"`
+			Description string   `json:"description"`
+			City        string   `json:"city"`
+			Address     string   `json:"address"`
+			Amenities   []string `json:"amenities"`
+			Rating      float64  `json:"rating"`
+			PriceRange  struct {
+				MinPrice float64 `json:"min_price"`
+				MaxPrice float64 `json:"max_price"`
+				Currency string  `json:"currency"`
+			} `json:"price_range"`
+			Thumbnail string `json:"thumbnail"`
+			IsActive  bool   `json:"is_active"`
+		}
+
+		// Si el evento no tiene datos completos del hotel, hacer GET al hotel-service
+		if event.Hotel.ID == "" || event.Hotel.Name == "" {
+			log.Printf("📞 Obteniendo datos completos del hotel %s desde hotel-service", event.HotelID)
+
+			// Hacer GET al hotel-service según las consignas del proyecto
+			hotelFromService, err := s.getHotelFromService(event.HotelID)
+			if err != nil {
+				return fmt.Errorf("error obteniendo hotel desde hotel-service: %v", err)
+			}
+			hotelData = hotelFromService
+		} else {
+			// Usar datos del evento
+			hotelData.ID = event.Hotel.ID
+			hotelData.Name = event.Hotel.Name
+			hotelData.Description = event.Hotel.Description
+			hotelData.City = event.Hotel.City
+			hotelData.Address = event.Hotel.Address
+			hotelData.Amenities = event.Hotel.Amenities
+			hotelData.Rating = event.Hotel.Rating
+			hotelData.PriceRange = event.Hotel.PriceRange
+			hotelData.Thumbnail = event.Hotel.Thumbnail
+			hotelData.IsActive = event.Hotel.IsActive
+		}
+
 		// Indexar o actualizar hotel en Solr
 		doc := solr.SolrDocument{
-			ID:          event.Hotel.ID,
-			Name:        event.Hotel.Name,
-			Description: event.Hotel.Description,
-			City:        event.Hotel.City,
-			Address:     event.Hotel.Address,
-			Amenities:   event.Hotel.Amenities,
-			Rating:      event.Hotel.Rating,
-			MinPrice:    event.Hotel.PriceRange.MinPrice,
-			MaxPrice:    event.Hotel.PriceRange.MaxPrice,
-			Currency:    event.Hotel.PriceRange.Currency,
-			Thumbnail:   event.Hotel.Thumbnail,
-			IsActive:    event.Hotel.IsActive,
+			ID:          hotelData.ID,
+			Name:        []string{hotelData.Name},                 // ✅ Convertir a slice
+			Description: []string{hotelData.Description},          // ✅ Convertir a slice
+			City:        []string{hotelData.City},                 // ✅ Convertir a slice
+			Address:     []string{hotelData.Address},              // ✅ Convertir a slice
+			Amenities:   hotelData.Amenities,                      // Ya es slice
+			Rating:      []float64{hotelData.Rating},              // ✅ Convertir a slice
+			MinPrice:    []float64{hotelData.PriceRange.MinPrice}, // ✅ Convertir a slice
+			MaxPrice:    []float64{hotelData.PriceRange.MaxPrice}, // ✅ Convertir a slice
+			Currency:    []string{hotelData.PriceRange.Currency},  // ✅ Convertir a slice
+			Thumbnail:   []string{hotelData.Thumbnail},            // ✅ Convertir a slice
+			IsActive:    []bool{hotelData.IsActive},               // ✅ Convertir a slice
 		}
 
 		err := s.solrClient.IndexHotel(doc)
@@ -73,7 +118,7 @@ func (s *SearchService) syncHotelToSolr(event rabbitmq.HotelEvent) error {
 
 		log.Printf("✅ Hotel %s sincronizado en Solr", event.HotelID)
 
-	case "deleted":
+	case "hotel.deleted": // ✅ AGREGADO "hotel." prefix
 		// Eliminar hotel de Solr
 		err := s.solrClient.DeleteHotel(event.HotelID)
 		if err != nil {
@@ -89,8 +134,81 @@ func (s *SearchService) syncHotelToSolr(event rabbitmq.HotelEvent) error {
 	return nil
 }
 
+// NUEVA FUNCIÓN: GET al hotel-service según las consignas
+func (s *SearchService) getHotelFromService(hotelID string) (struct {
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	City        string   `json:"city"`
+	Address     string   `json:"address"`
+	Amenities   []string `json:"amenities"`
+	Rating      float64  `json:"rating"`
+	PriceRange  struct {
+		MinPrice float64 `json:"min_price"`
+		MaxPrice float64 `json:"max_price"`
+		Currency string  `json:"currency"`
+	} `json:"price_range"`
+	Thumbnail string `json:"thumbnail"`
+	IsActive  bool   `json:"is_active"`
+}, error) {
+	var result struct {
+		ID          string   `json:"id"`
+		Name        string   `json:"name"`
+		Description string   `json:"description"`
+		City        string   `json:"city"`
+		Address     string   `json:"address"`
+		Amenities   []string `json:"amenities"`
+		Rating      float64  `json:"rating"`
+		PriceRange  struct {
+			MinPrice float64 `json:"min_price"`
+			MaxPrice float64 `json:"max_price"`
+			Currency string  `json:"currency"`
+		} `json:"price_range"`
+		Thumbnail string `json:"thumbnail"`
+		IsActive  bool   `json:"is_active"`
+	}
+
+	// GET al hotel-service según consignas del proyecto
+	url := fmt.Sprintf("http://hotel-service:8080/api/v1/hotels/%s", hotelID)
+
+	resp, err := s.httpClient.Get(url)
+	if err != nil {
+		return result, fmt.Errorf("error calling hotel-service: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return result, fmt.Errorf("hotel-service returned status %d", resp.StatusCode)
+	}
+
+	var response struct {
+		Data struct {
+			ID          string   `json:"id"`
+			Name        string   `json:"name"`
+			Description string   `json:"description"`
+			City        string   `json:"city"`
+			Address     string   `json:"address"`
+			Amenities   []string `json:"amenities"`
+			Rating      float64  `json:"rating"`
+			PriceRange  struct {
+				MinPrice float64 `json:"min_price"`
+				MaxPrice float64 `json:"max_price"`
+				Currency string  `json:"currency"`
+			} `json:"price_range"`
+			Thumbnail string `json:"thumbnail"`
+			IsActive  bool   `json:"is_active"`
+		} `json:"data"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return result, fmt.Errorf("error decoding hotel-service response: %v", err)
+	}
+
+	return response.Data, nil
+}
+
 func (s *SearchService) SearchHotelsWithAvailability(query, city, checkin, checkout, guests string) (map[string]interface{}, error) {
-	log.Printf("🔍 Buscando hoteles: query='%s', city='%s', checkin='%s', checkout='%s', guests='%s'", 
+	log.Printf("🔍 Buscando hoteles: query='%s', city='%s', checkin='%s', checkout='%s', guests='%s'",
 		query, city, checkin, checkout, guests)
 
 	// 1. Buscar hoteles en Solr
@@ -116,16 +234,16 @@ func (s *SearchService) SearchHotelsWithAvailability(query, city, checkin, check
 		for _, hotel := range hotels {
 			hotelData := map[string]interface{}{
 				"id":          hotel.ID,
-				"name":        hotel.Name,
-				"description": hotel.Description,
-				"city":        hotel.City,
-				"rating":      hotel.Rating,
-				"min_price":   hotel.MinPrice,
-				"max_price":   hotel.MaxPrice,
-				"currency":    hotel.Currency,
-				"thumbnail":   hotel.Thumbnail,
-				"amenities":   hotel.Amenities,
-				"available":   true, // Asumimos disponible si no verificamos
+				"name":        hotel.GetName(),        // ✅ Usar método helper
+				"description": hotel.GetDescription(), // ✅ Usar método helper
+				"city":        hotel.GetCity(),        // ✅ Usar método helper
+				"rating":      hotel.GetRating(),      // ✅ Usar método helper
+				"min_price":   hotel.GetMinPrice(),    // ✅ Usar método helper
+				"max_price":   hotel.GetMaxPrice(),    // ✅ Usar método helper
+				"currency":    hotel.GetCurrency(),    // ✅ Usar método helper
+				"thumbnail":   hotel.GetThumbnail(),   // ✅ Usar método helper
+				"amenities":   hotel.GetAmenities(),   // ✅ Usar método helper
+				"available":   true,                   // Asumimos disponible si no verificamos
 			}
 			hotelResults = append(hotelResults, hotelData)
 		}
@@ -157,15 +275,15 @@ func (s *SearchService) SearchHotelsWithAvailability(query, city, checkin, check
 		if availability.Available {
 			hotelData := map[string]interface{}{
 				"id":          hotel.ID,
-				"name":        hotel.Name,
-				"description": hotel.Description,
-				"city":        hotel.City,
-				"rating":      hotel.Rating,
-				"min_price":   hotel.MinPrice,
-				"max_price":   hotel.MaxPrice,
+				"name":        hotel.GetName(),        // ✅ Usar método helper
+				"description": hotel.GetDescription(), // ✅ Usar método helper
+				"city":        hotel.GetCity(),        // ✅ Usar método helper
+				"rating":      hotel.GetRating(),      // ✅ Usar método helper
+				"min_price":   hotel.GetMinPrice(),    // ✅ Usar método helper
+				"max_price":   hotel.GetMaxPrice(),    // ✅ Usar método helper
 				"currency":    availability.Currency,
-				"thumbnail":   hotel.Thumbnail,
-				"amenities":   hotel.Amenities,
+				"thumbnail":   hotel.GetThumbnail(), // ✅ Usar método helper
+				"amenities":   hotel.GetAmenities(), // ✅ Usar método helper
 				"available":   availability.Available,
 				"price":       availability.Price,
 			}
@@ -216,8 +334,8 @@ func (s *SearchService) checkAvailabilityConcurrent(hotels []solr.SolrDocument, 
 }
 
 func (s *SearchService) checkSingleAvailability(hotelID, checkin, checkout, guests string) AvailabilityResult {
-	// Llamar al booking-service para verificar disponibilidad
-	url := fmt.Sprintf("http://booking-service:8080/api/v1/availability/%s?checkin=%s&checkout=%s&guests=%s",
+	// ✅ CORREGIDO: Puerto interno 8080, path /api/availability y parámetros en minúscula
+	url := fmt.Sprintf("http://booking-service:8080/api/availability/%s?checkin=%s&checkout=%s&guests=%s",
 		hotelID, checkin, checkout, guests)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

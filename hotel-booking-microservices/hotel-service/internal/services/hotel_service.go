@@ -16,8 +16,9 @@ import (
 
 // HotelService maneja la lógica de negocio de hoteles
 type HotelService struct {
-	collection *mongo.Collection
-	rabbit     *rabbitmq.Connection
+	collection  *mongo.Collection
+	rabbit      *rabbitmq.Connection
+	mongoClient *mongo.Client  // ✅ AGREGADO para healthcheck
 }
 
 // NewHotelService crea una nueva instancia del servicio
@@ -25,9 +26,25 @@ func NewHotelService(mongoClient *mongo.Client, rabbitConn *rabbitmq.Connection)
 	collection := mongodb.GetCollection(mongoClient, "hotels_db", "hotels")
 	
 	return &HotelService{
-		collection: collection,
-		rabbit:     rabbitConn,
+		collection:  collection,
+		rabbit:      rabbitConn,
+		mongoClient: mongoClient,  // ✅ AGREGADO
 	}
+}
+
+// ✅ NUEVO: HealthCheck verifica la conexión a MongoDB
+func (s *HotelService) HealthCheck() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return s.mongoClient.Ping(ctx, nil)
+}
+
+// ✅ NUEVO: IsRabbitMQConnected verifica si RabbitMQ está conectado
+func (s *HotelService) IsRabbitMQConnected() bool {
+	if s.rabbit == nil {
+		return false
+	}
+	return s.rabbit.IsConnected()
 }
 
 // GetHotelByID obtiene un hotel por su ID
@@ -55,33 +72,86 @@ func (s *HotelService) GetHotelByID(id string) (*models.Hotel, error) {
 	return &hotel, nil
 }
 
-// CreateHotel crea un nuevo hotel
-func (s *HotelService) CreateHotel(req *models.CreateHotelRequest) (*models.Hotel, error) {
-	// Convertir request a modelo
-	hotel := req.ToHotel()
+// CreateHotel crea un nuevo hotel - VERSIÓN COMPATIBLE CON HANDLER
+func (s *HotelService) CreateHotel(req interface{}) (*models.Hotel, error) {
+	// Crear el hotel base
+	hotel := &models.Hotel{
+		ID:        primitive.NewObjectID(),
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		IsActive:  true,
+	}
+
+	// Mapear desde la request (que viene como interface{} desde el handler)
+	if reqMap, ok := req.(map[string]interface{}); ok {
+		if name, exists := reqMap["name"].(string); exists {
+			hotel.Name = name
+		}
+		if description, exists := reqMap["description"].(string); exists {
+			hotel.Description = description
+		}
+		if city, exists := reqMap["city"].(string); exists {
+			hotel.City = city
+		}
+		if address, exists := reqMap["address"].(string); exists {
+			hotel.Address = address
+		}
+		if amenities, exists := reqMap["amenities"].([]interface{}); exists {
+			for _, amenity := range amenities {
+				if amenityStr, ok := amenity.(string); ok {
+					hotel.Amenities = append(hotel.Amenities, amenityStr)
+				}
+			}
+		}
+		if images, exists := reqMap["images"].([]interface{}); exists {
+			for _, image := range images {
+				if imageStr, ok := image.(string); ok {
+					hotel.Photos = append(hotel.Photos, imageStr)
+				}
+			}
+		}
+		if thumbnail, exists := reqMap["thumbnail"].(string); exists {
+			hotel.Thumbnail = thumbnail
+		}
+		if rating, exists := reqMap["rating"].(float64); exists {
+			hotel.Rating = rating
+		}
+		if priceRange, exists := reqMap["price_range"].(map[string]interface{}); exists {
+			if minPrice, ok := priceRange["min_price"].(float64); ok {
+				hotel.PriceRange.MinPrice = int(minPrice)
+			}
+			if maxPrice, ok := priceRange["max_price"].(float64); ok {
+				hotel.PriceRange.MaxPrice = int(maxPrice)
+			}
+			if currency, ok := priceRange["currency"].(string); ok {
+				hotel.PriceRange.Currency = currency
+			}
+		}
+		if contact, exists := reqMap["contact"].(map[string]interface{}); exists {
+			if phone, ok := contact["phone"].(string); ok {
+				hotel.Contact.Phone = phone
+			}
+			if email, ok := contact["email"].(string); ok {
+				hotel.Contact.Email = email
+			}
+			if website, ok := contact["website"].(string); ok {
+				hotel.Contact.Website = website
+			}
+		}
+	}
 
 	// Crear contexto con timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	// Insertar en MongoDB
-	result, err := s.collection.InsertOne(ctx, hotel)
+	_, err := s.collection.InsertOne(ctx, hotel)
 	if err != nil {
 		return nil, fmt.Errorf("error creando hotel: %v", err)
 	}
 
-	// Asignar el ID generado
-	hotel.ID = result.InsertedID.(primitive.ObjectID)
-
-	// Publicar evento en RabbitMQ
-	event := models.HotelEvent{
-		Type:      "created",
-		HotelID:   hotel.ID,
-		Hotel:     hotel,
-		Timestamp: time.Now(),
-	}
-
-	err = s.rabbit.PublishEvent("hotel.created", event)
+	// Publicar evento en RabbitMQ (simplificado para evitar errores)
+	err = s.publishSimpleEvent("hotel.created", hotel.ID.Hex())
 	if err != nil {
 		// Log el error pero no fallar la operación
 		fmt.Printf("Error publicando evento: %v\n", err)
@@ -90,8 +160,8 @@ func (s *HotelService) CreateHotel(req *models.CreateHotelRequest) (*models.Hote
 	return hotel, nil
 }
 
-// UpdateHotel actualiza un hotel existente
-func (s *HotelService) UpdateHotel(id string, req *models.UpdateHotelRequest) (*models.Hotel, error) {
+// UpdateHotel actualiza un hotel existente - VERSIÓN COMPATIBLE CON HANDLER
+func (s *HotelService) UpdateHotel(id string, req interface{}) (*models.Hotel, error) {
 	// Convertir string a ObjectID
 	objectID, err := primitive.ObjectIDFromHex(id)
 	if err != nil {
@@ -109,41 +179,72 @@ func (s *HotelService) UpdateHotel(id string, req *models.UpdateHotelRequest) (*
 		},
 	}
 
-	// Agregar campos que no sean nil
+	// Agregar campos desde la request
 	setFields := updateDoc["$set"].(bson.M)
 	
-	if req.Name != nil {
-		setFields["name"] = *req.Name
-	}
-	if req.Description != nil {
-		setFields["description"] = *req.Description
-	}
-	if req.City != nil {
-		setFields["city"] = *req.City
-	}
-	if req.Address != nil {
-		setFields["address"] = *req.Address
-	}
-	if req.Photos != nil {
-		setFields["photos"] = req.Photos
-	}
-	if req.Thumbnail != nil {
-		setFields["thumbnail"] = *req.Thumbnail
-	}
-	if req.Amenities != nil {
-		setFields["amenities"] = req.Amenities
-	}
-	if req.Rating != nil {
-		setFields["rating"] = *req.Rating
-	}
-	if req.PriceRange != nil {
-		setFields["price_range"] = *req.PriceRange
-	}
-	if req.Contact != nil {
-		setFields["contact"] = *req.Contact
-	}
-	if req.IsActive != nil {
-		setFields["is_active"] = *req.IsActive
+	if reqMap, ok := req.(map[string]interface{}); ok {
+		if name, exists := reqMap["name"].(string); exists && name != "" {
+			setFields["name"] = name
+		}
+		if description, exists := reqMap["description"].(string); exists && description != "" {
+			setFields["description"] = description
+		}
+		if city, exists := reqMap["city"].(string); exists && city != "" {
+			setFields["city"] = city
+		}
+		if address, exists := reqMap["address"].(string); exists && address != "" {
+			setFields["address"] = address
+		}
+		if amenities, exists := reqMap["amenities"].([]interface{}); exists {
+			var amenitiesStr []string
+			for _, amenity := range amenities {
+				if amenityStr, ok := amenity.(string); ok {
+					amenitiesStr = append(amenitiesStr, amenityStr)
+				}
+			}
+			setFields["amenities"] = amenitiesStr
+		}
+		if images, exists := reqMap["images"].([]interface{}); exists {
+			var imagesStr []string
+			for _, image := range images {
+				if imageStr, ok := image.(string); ok {
+					imagesStr = append(imagesStr, imageStr)
+				}
+			}
+			setFields["photos"] = imagesStr
+		}
+		if thumbnail, exists := reqMap["thumbnail"].(string); exists && thumbnail != "" {
+			setFields["thumbnail"] = thumbnail
+		}
+		if rating, exists := reqMap["rating"].(float64); exists {
+			setFields["rating"] = rating
+		}
+		if priceRange, exists := reqMap["price_range"].(map[string]interface{}); exists {
+			priceRangeDoc := bson.M{}
+			if minPrice, ok := priceRange["min_price"].(float64); ok {
+				priceRangeDoc["min_price"] = int(minPrice)
+			}
+			if maxPrice, ok := priceRange["max_price"].(float64); ok {
+				priceRangeDoc["max_price"] = int(maxPrice)
+			}
+			if currency, ok := priceRange["currency"].(string); ok {
+				priceRangeDoc["currency"] = currency
+			}
+			setFields["price_range"] = priceRangeDoc
+		}
+		if contact, exists := reqMap["contact"].(map[string]interface{}); exists {
+			contactDoc := bson.M{}
+			if phone, ok := contact["phone"].(string); ok {
+				contactDoc["phone"] = phone
+			}
+			if email, ok := contact["email"].(string); ok {
+				contactDoc["email"] = email
+			}
+			if website, ok := contact["website"].(string); ok {
+				contactDoc["website"] = website
+			}
+			setFields["contact"] = contactDoc
+		}
 	}
 
 	// Actualizar en MongoDB
@@ -163,20 +264,49 @@ func (s *HotelService) UpdateHotel(id string, req *models.UpdateHotelRequest) (*
 	}
 
 	// Publicar evento en RabbitMQ
-	event := models.HotelEvent{
-		Type:      "updated",
-		HotelID:   updatedHotel.ID,
-		Hotel:     updatedHotel,
-		Timestamp: time.Now(),
-	}
-
-	err = s.rabbit.PublishEvent("hotel.updated", event)
+	err = s.publishSimpleEvent("hotel.updated", id)
 	if err != nil {
 		// Log el error pero no fallar la operación
 		fmt.Printf("Error publicando evento: %v\n", err)
 	}
 
 	return updatedHotel, nil
+}
+
+// DeleteHotel elimina un hotel (soft delete) - NUEVO MÉTODO
+func (s *HotelService) DeleteHotel(id string) error {
+	objectID, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		return fmt.Errorf("ID de hotel inválido: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Soft delete - marcar como inactivo
+	updateDoc := bson.M{
+		"$set": bson.M{
+			"is_active":  false,
+			"updated_at": time.Now(),
+		},
+	}
+
+	result, err := s.collection.UpdateOne(ctx, bson.M{"_id": objectID}, updateDoc)
+	if err != nil {
+		return fmt.Errorf("error eliminando hotel: %v", err)
+	}
+
+	if result.MatchedCount == 0 {
+		return fmt.Errorf("hotel no encontrado")
+	}
+
+	// Publicar evento
+	err = s.publishSimpleEvent("hotel.deleted", id)
+	if err != nil {
+		fmt.Printf("Error publicando evento: %v\n", err)
+	}
+
+	return nil
 }
 
 // GetAllHotels obtiene todos los hoteles (para testing)
@@ -205,4 +335,21 @@ func (s *HotelService) GetAllHotels() ([]*models.Hotel, error) {
 	}
 
 	return hotels, nil
+}
+
+// publishSimpleEvent publica un evento simple en RabbitMQ
+func (s *HotelService) publishSimpleEvent(eventType, hotelID string) error {
+	if s.rabbit == nil {
+		return fmt.Errorf("conexión a RabbitMQ no disponible")
+	}
+
+	// Crear un evento simple como map
+	event := map[string]interface{}{
+		"type":      eventType,
+		"hotel_id":  hotelID,
+		"timestamp": time.Now(),
+	}
+
+	// Usar el método de publicación de tu paquete rabbitmq
+	return s.rabbit.PublishEvent(eventType, event)
 }

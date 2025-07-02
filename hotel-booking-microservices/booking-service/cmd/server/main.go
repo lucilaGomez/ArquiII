@@ -6,13 +6,12 @@ import (
 	"os"
 
 	"github.com/gin-gonic/gin"
-	
 	"booking-service/internal/config"
 	"booking-service/internal/handlers"
 	"booking-service/internal/services"
-	"booking-service/pkg/amadeus"
-	"booking-service/pkg/memcached"
 	"booking-service/pkg/mysql"
+	"booking-service/pkg/memcached"
+	"booking-service/pkg/amadeus"
 )
 
 func main() {
@@ -27,24 +26,28 @@ func main() {
 	defer db.Close()
 
 	// Conectar a Memcached
-	cache, err := memcached.Connect(cfg.MemcachedURI)
+	mc, err := memcached.Connect(cfg.MemcachedURI)
 	if err != nil {
 		log.Fatalf("Error conectando a Memcached: %v", err)
 	}
-	defer cache.Close()
 
-	// Inicializar cliente de Amadeus
-	var amadeusClient *amadeus.Client
-	if cfg.AmadeusClientID != "" && cfg.AmadeusClientSecret != "" {
-		amadeusClient = amadeus.NewClient(cfg.AmadeusBaseURL, cfg.AmadeusClientID, cfg.AmadeusClientSecret)
-		log.Println("🌐 Cliente de Amadeus inicializado")
+	// Conectar a Amadeus (corregido)
+	amadeusClient := amadeus.NewClient(cfg.AmadeusBaseURL, cfg.AmadeusClientID, cfg.AmadeusClientSecret)
+	
+	// Verificar que Amadeus está configurado correctamente
+	if cfg.AmadeusClientID == "" || cfg.AmadeusClientSecret == "" {
+		log.Printf("⚠️  Warning: Credenciales de Amadeus no configuradas")
 	} else {
-		log.Println("⚠️ Credenciales de Amadeus no configuradas - funcionando en modo simulado")
-		amadeusClient = amadeus.NewClient(cfg.AmadeusBaseURL, "demo", "demo")
+		// Intentar obtener token para verificar conectividad
+		if err := amadeusClient.GetAccessToken(); err != nil {
+			log.Printf("⚠️  Warning: Error obteniendo token de Amadeus: %v", err)
+		} else {
+			log.Printf("✅ Cliente Amadeus configurado correctamente")
+		}
 	}
 
 	// Inicializar servicios
-	bookingService := services.NewBookingService(db, cache, amadeusClient, cfg.JWTSecret)
+	bookingService := services.NewBookingService(db, mc, amadeusClient, cfg.JWTSecret)
 
 	// Inicializar handlers
 	bookingHandler := handlers.NewBookingHandler(bookingService)
@@ -54,7 +57,7 @@ func main() {
 
 	// Obtener puerto
 	port := cfg.Port
-	log.Printf("👥 Booking Service iniciando en puerto %s", port)
+	log.Printf("📋 Booking Service iniciando en puerto %s", port)
 	
 	if err := http.ListenAndServe(":"+port, router); err != nil {
 		log.Fatalf("Error iniciando servidor: %v", err)
@@ -95,35 +98,29 @@ func setupRoutes(bookingHandler *handlers.BookingHandler) *gin.Engine {
 		})
 	})
 
-	// API v1
-	v1 := router.Group("/api/v1")
+	// API routes
+	api := router.Group("/api")
 	{
-		// Rutas públicas (auth)
-		auth := v1.Group("/auth")
-		{
-			auth.POST("/register", bookingHandler.Register)
-			auth.POST("/login", bookingHandler.Login)
-		}
-
+		// Rutas públicas (sin autenticación)
+		api.POST("/auth/register", bookingHandler.Register)
+		api.POST("/auth/login", bookingHandler.Login)
+		
 		// Rutas de disponibilidad (públicas)
-		availability := v1.Group("/availability")
-		{
-			availability.GET("/:hotelId", bookingHandler.CheckAvailability)
-		}
+		api.GET("/availability/:hotelId", bookingHandler.CheckAvailability)
 
 		// Rutas protegidas (requieren autenticación)
-		protected := v1.Group("/")
+		protected := api.Group("")
 		protected.Use(bookingHandler.AuthMiddleware())
 		{
 			// Perfil de usuario
 			protected.GET("/profile", bookingHandler.GetProfile)
-
+			
 			// Reservas
 			bookings := protected.Group("/bookings")
 			{
-				bookings.POST("", bookingHandler.CreateBooking)
-				bookings.GET("", bookingHandler.GetBookings)
-				bookings.GET("/:id", bookingHandler.GetBookingByID)
+				bookings.POST("", bookingHandler.CreateBooking)                    // Crear reserva
+				bookings.GET("/my-bookings", bookingHandler.GetBookings)           // NUEVA RUTA - Mis reservas
+				bookings.GET("/:id", bookingHandler.GetBookingByID)                // Obtener reserva por ID
 			}
 		}
 	}

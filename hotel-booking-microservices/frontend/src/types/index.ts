@@ -48,6 +48,7 @@ export interface User {
   first_name: string;
   last_name: string;
   phone: string;
+  role: 'user' | 'admin'; // ← CAMPO AGREGADO
 }
 
 export interface Booking {

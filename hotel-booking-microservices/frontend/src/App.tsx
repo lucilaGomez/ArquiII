@@ -1,19 +1,37 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
-import Home from './pages/Home';
-import Results from './pages/Results';
+import Login from './pages/Login';
+import Dashboard from './pages/Dashboard';
+import AdminDashboard from './pages/AdminDashboard';
 import Detail from './pages/Detail';
-import Confirmation from './pages/Confirmation'; // Agregar esta línea
+import Results from './pages/Results';
+import Confirmation from './pages/Confirmation';
 
 function App() {
   return (
     <Router>
-      <div style={{ minHeight: '100vh', backgroundColor: '#f0f2f5' }}>
+      <div className="App">
         <Routes>
-          <Route path="/" element={<Home />} />
+          {/* Página principal - Login */}
+          <Route path="/" element={<Login />} />
+          
+          {/* Dashboard para usuarios autenticados */}
+          <Route path="/dashboard" element={<Dashboard />} />
+          
+          {/* Panel de administración (solo admins) */}
+          <Route path="/admin" element={<AdminDashboard />} />
+          
+          {/* Resultados de búsqueda */}
           <Route path="/results" element={<Results />} />
+          
+          {/* Detalles del hotel */}
           <Route path="/hotel/:id" element={<Detail />} />
+          
+          {/* Confirmación de reserva */}
           <Route path="/confirmation" element={<Confirmation />} />
+          
+          {/* Ruta por defecto - redirige a login */}
+          <Route path="*" element={<Login />} />
         </Routes>
       </div>
     </Router>

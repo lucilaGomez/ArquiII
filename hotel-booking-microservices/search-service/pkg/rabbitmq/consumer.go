@@ -6,7 +6,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/streadway/amqp"
+	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 type Consumer struct {
@@ -78,14 +78,14 @@ func (c *Consumer) setup() error {
 		return fmt.Errorf("error declaring exchange: %v", err)
 	}
 
-	// Declarar cola específica para search-service
+	// CORREGIDO: Usar el mismo nombre de cola que hotel-service
 	_, err = c.channel.QueueDeclare(
-		"search_service_queue", // nombre
-		true,                   // durable
-		false,                  // delete when unused
-		false,                  // exclusive
-		false,                  // no-wait
-		nil,                    // arguments
+		"hotel_updates", // nombre - MISMO que hotel-service
+		true,            // durable
+		false,           // delete when unused
+		false,           // exclusive
+		false,           // no-wait
+		nil,             // arguments
 	)
 	if err != nil {
 		return fmt.Errorf("error declaring queue: %v", err)
@@ -93,9 +93,9 @@ func (c *Consumer) setup() error {
 
 	// Vincular cola al exchange para todos los eventos de hotel
 	err = c.channel.QueueBind(
-		"search_service_queue", // queue name
-		"hotel.*",              // routing key pattern
-		"hotel_events",         // exchange
+		"hotel_updates", // queue name - CORREGIDO
+		"hotel.*",       // routing key pattern
+		"hotel_events",  // exchange
 		false,
 		nil,
 	)
@@ -118,13 +118,13 @@ func (c *Consumer) StartConsuming(callback func(HotelEvent) error) error {
 	}
 
 	msgs, err := c.channel.Consume(
-		"search_service_queue", // queue
-		"search-service",       // consumer tag
-		false,                  // auto-ack (false para manual ack)
-		false,                  // exclusive
-		false,                  // no-local
-		false,                  // no-wait
-		nil,                    // args
+		"hotel_updates",  // queue - CORREGIDO
+		"search-service", // consumer tag
+		false,            // auto-ack (false para manual ack)
+		false,            // exclusive
+		false,            // no-local
+		false,            // no-wait
+		nil,              // args
 	)
 	if err != nil {
 		return fmt.Errorf("error consuming messages: %v", err)

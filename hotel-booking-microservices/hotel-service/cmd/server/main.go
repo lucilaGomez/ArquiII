@@ -74,24 +74,60 @@ func setupRoutes(hotelHandler *handlers.HotelHandler) *gin.Engine {
 	router.Use(gin.Logger())
 	router.Use(gin.Recovery())
 
-	// Ruta de salud
+	// ✅ HEALTHCHECK MEJORADO - Verifica conexiones reales
 	router.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"status":  "ok",
+		// Verificar MongoDB
+		mongoStatus := "connected"
+		if err := hotelHandler.HealthCheck(); err != nil {
+			mongoStatus = "disconnected"
+		}
+
+		// Verificar RabbitMQ
+		rabbitStatus := "connected"
+		if !hotelHandler.IsRabbitMQConnected() {
+			rabbitStatus = "disconnected"
+		}
+
+		// Determinar status general
+		overallStatus := "ok"
+		statusCode := http.StatusOK
+		if mongoStatus == "disconnected" || rabbitStatus == "disconnected" {
+			overallStatus = "unhealthy"
+			statusCode = http.StatusServiceUnavailable
+		}
+
+		c.JSON(statusCode, gin.H{
+			"status":  overallStatus,
 			"service": "hotel-service",
 			"version": "1.0.0",
+			"checks": gin.H{
+				"mongodb":  mongoStatus,
+				"rabbitmq": rabbitStatus,
+			},
 		})
 	})
+
+	// IMPORTANTE: Servir archivos estáticos
+	router.Static("/uploads", "./uploads")
 
 	// API v1
 	v1 := router.Group("/api/v1")
 	{
 		hotels := v1.Group("/hotels")
 		{
+			// Rutas públicas
 			hotels.GET("/:id", hotelHandler.GetHotelByID)
-			hotels.POST("", hotelHandler.CreateHotel)
-			hotels.PUT("/:id", hotelHandler.UpdateHotel)
 			hotels.GET("", hotelHandler.GetAllHotels)
+			
+			// Rutas de administración (deberías agregar middleware de auth aquí)
+			hotels.POST("", hotelHandler.CreateHotel)           // Crear hotel
+			hotels.PUT("/:id", hotelHandler.UpdateHotel)        // Actualizar hotel
+			hotels.DELETE("/:id", hotelHandler.DeleteHotel)     // Eliminar hotel
+			hotels.GET("/stats", hotelHandler.GetHotelStats)    // Estadísticas
+			
+			// NUEVAS RUTAS para upload de imágenes
+			hotels.POST("/upload-single", hotelHandler.UploadSingleImage)    // Subir imagen individual
+			hotels.POST("/upload-images", hotelHandler.UploadHotelImages)    // Subir múltiples imágenes
 		}
 	}
 

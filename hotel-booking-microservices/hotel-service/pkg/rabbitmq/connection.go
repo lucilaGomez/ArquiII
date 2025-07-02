@@ -6,7 +6,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/streadway/amqp"
+	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 // Connection wrapper para RabbitMQ
@@ -127,4 +127,15 @@ func (r *Connection) Close() error {
 		return r.conn.Close()
 	}
 	return nil
+}
+
+// IsConnected verifica si la conexión está activa
+func (r *Connection) IsConnected() bool {
+	if r.conn == nil || r.conn.IsClosed() {
+		return false
+	}
+	if r.channel == nil {
+		return false
+	}
+	return true
 }

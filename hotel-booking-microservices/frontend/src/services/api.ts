@@ -1,10 +1,10 @@
 import axios from 'axios';
-import { Hotel, SearchResult, User, Booking, AuthResponse } from '../types';
+import { User, Booking, AuthResponse } from '../types';
 
 const API_BASE = {
   hotel: 'http://localhost:8001/api/v1',
   search: 'http://localhost:8002/api/v1', 
-  booking: 'http://localhost:8003/api/v1'
+  booking: 'http://localhost:8003/api'     // CORREGIDO: Puerto 8003 y SIN /v1
 };
 
 // Configurar axios para incluir token automáticamente
@@ -22,22 +22,59 @@ bookingApi.interceptors.request.use((config) => {
 });
 
 export const hotelAPI = {
-  // Crear hotel
-  createHotel: async (hotelData: any): Promise<Hotel> => {
-    const response = await axios.post(`${API_BASE.hotel}/hotels`, hotelData);
-    return response.data.data;
+  // Obtener todos los hoteles
+  getAllHotels: async () => {
+    const response = await axios.get(`${API_BASE.hotel}/hotels`);
+    return { data: response.data.data || [] };
   },
 
   // Obtener hotel por ID
-  getHotel: async (id: string): Promise<Hotel> => {
+  getHotel: async (id: string) => {
     const response = await axios.get(`${API_BASE.hotel}/hotels/${id}`);
-    return response.data.data;
+    return { data: response.data.data };
   },
 
-  // Obtener todos los hoteles
-  getAllHotels: async (): Promise<Hotel[]> => {
-    const response = await axios.get(`${API_BASE.hotel}/hotels`);
-    return response.data.data;
+  // Crear hotel
+  createHotel: async (hotelData: any) => {
+    const token = localStorage.getItem('token');
+    const response = await axios.post(`${API_BASE.hotel}/hotels`, hotelData, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+    });
+    return { data: response.data.data };
+  },
+
+  // Actualizar hotel
+  updateHotel: async (id: string, hotelData: any) => {
+    const token = localStorage.getItem('token');
+    const response = await axios.put(`${API_BASE.hotel}/hotels/${id}`, hotelData, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+    });
+    return { data: response.data.data };
+  },
+
+  // Eliminar hotel
+  deleteHotel: async (id: string) => {
+    const token = localStorage.getItem('token');
+    await axios.delete(`${API_BASE.hotel}/hotels/${id}`, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+    });
+  },
+
+  // Estadísticas de hoteles
+  getHotelStats: async () => {
+    const token = localStorage.getItem('token');
+    const response = await axios.get(`${API_BASE.hotel}/stats`, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+    });
+    return { data: response.data.data };
   }
 };
 
@@ -67,7 +104,7 @@ export const searchAPI = {
 };
 
 export const bookingAPI = {
-  // Registro
+  // Registro - CORREGIDO: sin /v1
   register: async (userData: {
     email: string;
     password: string;
@@ -79,7 +116,7 @@ export const bookingAPI = {
     return response.data.data;
   },
 
-  // Login
+  // Login - CORREGIDO: sin /v1
   login: async (credentials: {
     email: string;
     password: string;

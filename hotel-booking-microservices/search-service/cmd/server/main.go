@@ -41,28 +41,25 @@ func main() {
 		log.Println("✅ Conexión a Solr exitosa")
 	}
 
-	// Inicializar RabbitMQ Consumer
+	// CORREGIDO: Forzar conexión a RabbitMQ
+	log.Println("🐰 Intentando conectar a RabbitMQ...")
 	rabbitConsumer, err := rabbitmq.NewConsumer(cfg.RabbitMQURI)
 	if err != nil {
-		log.Printf("⚠️ No se pudo conectar a RabbitMQ: %v", err)
-		log.Println("🔄 Continuando sin consumer de eventos...")
-		rabbitConsumer = nil
-	} else {
-		log.Println("✅ RabbitMQ Consumer conectado")
+		log.Fatalf("❌ CRÍTICO: No se pudo conectar a RabbitMQ: %v", err)
 	}
+	log.Println("✅ RabbitMQ Consumer conectado exitosamente")
 
 	// Inicializar servicio
 	searchService := services.NewSearchService(solrClient, rabbitConsumer)
 
-	// Iniciar consumer de eventos si está disponible
-	if rabbitConsumer != nil {
-		go func() {
-			if err := searchService.StartEventConsumer(); err != nil {
-				log.Printf("❌ Error en consumer de eventos: %v", err)
-			}
-		}()
-		log.Println("🚀 Consumer de eventos iniciado")
-	}
+	// CORREGIDO: Siempre iniciar consumer de eventos
+	log.Println("🚀 Iniciando consumer de eventos...")
+	go func() {
+		if err := searchService.StartEventConsumer(); err != nil {
+			log.Fatalf("❌ Error CRÍTICO en consumer de eventos: %v", err)
+		}
+	}()
+	log.Println("✅ Consumer de eventos iniciado correctamente")
 
 	// Inicializar handlers
 	searchHandler := handlers.NewSearchHandler(searchService)
@@ -74,13 +71,11 @@ func main() {
 	setupGracefulShutdown(rabbitConsumer)
 
 	port := cfg.Port
-	log.Printf("🌐 Search Service iniciando en puerto %s", port)
+	log.Printf("🌐 Search Service listo en puerto %s", port)
 	log.Println("🎯 Funcionalidades activas:")
-	log.Println("   - Búsqueda en Solr")
-	log.Println("   - Verificación concurrente de disponibilidad")
-	if rabbitConsumer != nil {
-		log.Println("   - Sincronización automática vía RabbitMQ")
-	}
+	log.Println("   ✅ Búsqueda en Solr")
+	log.Println("   ✅ Verificación concurrente de disponibilidad")
+	log.Println("   ✅ Sincronización automática vía RabbitMQ")
 
 	if err := http.ListenAndServe(":"+port, router); err != nil {
 		log.Fatalf("❌ Error iniciando servidor: %v", err)

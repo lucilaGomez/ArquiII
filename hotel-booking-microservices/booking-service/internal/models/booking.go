@@ -4,6 +4,14 @@ import (
 	"time"
 )
 
+// UserRole define los roles de usuario  
+type UserRole string
+
+const (
+	RoleUser  UserRole = "user"
+	RoleAdmin UserRole = "admin"
+)
+
 // User representa un usuario del sistema
 type User struct {
 	ID          int       `json:"id" db:"id"`
@@ -11,11 +19,22 @@ type User struct {
 	PasswordHash string   `json:"-" db:"password_hash"`
 	FirstName   string    `json:"first_name" db:"first_name" validate:"required,min=2,max=50"`
 	LastName    string    `json:"last_name" db:"last_name" validate:"required,min=2,max=50"`
+	Role        UserRole  `json:"role" db:"role"` // ← LÍNEA AGREGADA
 	Phone       string    `json:"phone" db:"phone"`
 	DateOfBirth *time.Time `json:"date_of_birth" db:"date_of_birth"`
 	CreatedAt   time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at" db:"updated_at"`
 	IsActive    bool      `json:"is_active" db:"is_active"`
+}
+
+// IsAdmin verifica si el usuario es administrador
+func (u *User) IsAdmin() bool {
+	return u.Role == RoleAdmin
+}
+
+// IsUser verifica si el usuario es usuario normal
+func (u *User) IsUser() bool {
+	return u.Role == RoleUser
 }
 
 // Booking representa una reserva
@@ -70,6 +89,7 @@ type RegisterRequest struct {
 	Password    string     `json:"password" validate:"required,min=6"`
 	FirstName   string     `json:"first_name" validate:"required,min=2,max=50"`
 	LastName    string     `json:"last_name" validate:"required,min=2,max=50"`
+	Role        UserRole   `json:"role"` // ← LÍNEA AGREGADA (opcional para registro)
 	Phone       string     `json:"phone"`
 	DateOfBirth *time.Time `json:"date_of_birth"`
 }

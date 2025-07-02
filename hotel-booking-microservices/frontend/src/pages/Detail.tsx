@@ -32,6 +32,19 @@ const Detail: React.FC = () => {
   const checkout = searchParams.get('checkout') || '';
   const guests = parseInt(searchParams.get('guests') || '2');
 
+  // Función para construir URL completa de imagen
+  const getImageUrl = (imagePath: string | undefined) => {
+    if (!imagePath) return null;
+    
+    // Si ya es una URL completa, devolverla tal como está
+    if (imagePath.startsWith('http')) {
+      return imagePath;
+    }
+    
+    // Si es una ruta relativa, construir URL completa
+    return `http://localhost:8001${imagePath}`;
+  };
+
   useEffect(() => {
     // Verificar si el usuario está logueado
     const token = localStorage.getItem('token');
@@ -50,7 +63,7 @@ const Detail: React.FC = () => {
         
         // Obtener detalles del hotel
         const hotelData = await hotelAPI.getHotel(id);
-        setHotel(hotelData);
+        setHotel(hotelData.data);
 
         // Verificar disponibilidad si tenemos fechas
         if (checkin && checkout) {
@@ -232,6 +245,8 @@ const Detail: React.FC = () => {
     );
   }
 
+  const thumbnailUrl = getImageUrl(hotel.thumbnail);
+
   return (
     <div style={{ padding: '20px', maxWidth: '1200px', margin: '0 auto' }}>
       {/* Navegación */}
@@ -264,16 +279,62 @@ const Detail: React.FC = () => {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          fontSize: '72px'
+          fontSize: '72px',
+          position: 'relative'
         }}>
-          {hotel.thumbnail ? (
+          {thumbnailUrl ? (
             <img 
-              src={hotel.thumbnail} 
+              src={thumbnailUrl} 
               alt={hotel.name}
               style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+              onError={(e) => {
+                // Si la imagen falla al cargar, mostrar emoji de hotel
+                const target = e.target as HTMLImageElement;
+                target.style.display = 'none';
+                const parent = target.parentElement;
+                if (parent) {
+                  parent.innerHTML = '<div style="font-size: 72px;">🏨</div>';
+                }
+              }}
             />
-          ) : '🏨'}
+          ) : (
+            <div style={{ fontSize: '72px' }}>🏨</div>
+          )}
         </div>
+
+        {/* Galería de imágenes adicionales */}
+        {hotel.photos && hotel.photos.length > 0 && (
+          <div style={{ padding: '20px' }}>
+            <h3 style={{ marginBottom: '15px', color: '#333' }}>📸 Galería de Imágenes</h3>
+            <div style={{ 
+              display: 'grid', 
+              gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', 
+              gap: '10px' 
+            }}>
+              {hotel.photos.map((photo, index) => {
+                const photoUrl = getImageUrl(photo);
+                return photoUrl ? (
+                  <img 
+                    key={index}
+                    src={photoUrl} 
+                    alt={`${hotel.name} - imagen ${index + 1}`}
+                    style={{ 
+                      width: '100%', 
+                      height: '100px', 
+                      objectFit: 'cover',
+                      borderRadius: '8px',
+                      border: '1px solid #ddd'
+                    }}
+                    onError={(e) => {
+                      const target = e.target as HTMLImageElement;
+                      target.style.display = 'none';
+                    }}
+                  />
+                ) : null;
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Información del hotel */}
         <div style={{ padding: '30px' }}>
@@ -284,20 +345,20 @@ const Detail: React.FC = () => {
                 <h1 style={{ margin: 0, color: '#1976d2' }}>{hotel.name}</h1>
                 <div style={{ textAlign: 'right' }}>
                   <div style={{ color: '#ff9800', fontWeight: 'bold', fontSize: '20px' }}>
-                    {'⭐'.repeat(Math.floor(hotel.rating))}
+                    {'⭐'.repeat(Math.floor(hotel.rating || 0))}
                   </div>
-                  <div style={{ color: '#666' }}>{hotel.rating}/5</div>
+                  <div style={{ color: '#666' }}>{hotel.rating || 0}/5</div>
                 </div>
               </div>
 
               <p style={{ color: '#666', fontSize: '16px', lineHeight: '1.6', marginBottom: '20px' }}>
-                {hotel.description}
+                {hotel.description || 'No hay descripción disponible'}
               </p>
 
               <div style={{ marginBottom: '20px' }}>
                 <h3>📍 Ubicación</h3>
                 <p style={{ color: '#666' }}>
-                  {hotel.address}, {hotel.city}
+                  {hotel.address || 'Dirección no disponible'}, {hotel.city || 'Ciudad no disponible'}
                 </p>
               </div>
 
@@ -305,20 +366,24 @@ const Detail: React.FC = () => {
               <div style={{ marginBottom: '20px' }}>
                 <h3>✨ Amenidades</h3>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
-                  {hotel.amenities.map((amenity, index) => (
-                    <span 
-                      key={index}
-                      style={{ 
-                        backgroundColor: '#e3f2fd', 
-                        padding: '8px 16px', 
-                        borderRadius: '20px',
-                        color: '#1976d2',
-                        fontWeight: 'bold'
-                      }}
-                    >
-                      {amenity}
-                    </span>
-                  ))}
+                  {hotel.amenities && hotel.amenities.length > 0 ? (
+                    hotel.amenities.map((amenity, index) => (
+                      <span 
+                        key={index}
+                        style={{ 
+                          backgroundColor: '#e3f2fd', 
+                          padding: '8px 16px', 
+                          borderRadius: '20px',
+                          color: '#1976d2',
+                          fontWeight: 'bold'
+                        }}
+                      >
+                        {amenity}
+                      </span>
+                    ))
+                  ) : (
+                    <span style={{ color: '#666' }}>No hay amenidades disponibles</span>
+                  )}
                 </div>
               </div>
 
@@ -326,14 +391,17 @@ const Detail: React.FC = () => {
               <div>
                 <h3>📞 Contacto</h3>
                 <div style={{ color: '#666' }}>
-                  {hotel.contact.phone && <div>Teléfono: {hotel.contact.phone}</div>}
-                  {hotel.contact.email && <div>Email: {hotel.contact.email}</div>}
-                  {hotel.contact.website && (
+                  {hotel.contact && hotel.contact.phone && <div>Teléfono: {hotel.contact.phone}</div>}
+                  {hotel.contact && hotel.contact.email && <div>Email: {hotel.contact.email}</div>}
+                  {hotel.contact && hotel.contact.website && (
                     <div>
                       Sitio web: <a href={hotel.contact.website} target="_blank" rel="noopener noreferrer">
                         {hotel.contact.website}
                       </a>
                     </div>
+                  )}
+                  {(!hotel.contact || (!hotel.contact.phone && !hotel.contact.email && !hotel.contact.website)) && (
+                    <div>No hay información de contacto disponible</div>
                   )}
                 </div>
               </div>
@@ -348,7 +416,7 @@ const Detail: React.FC = () => {
             }}>
               <h3 style={{ marginTop: 0 }}>💰 Precio por noche</h3>
               <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#2e7d32', marginBottom: '15px' }}>
-                ${hotel.price_range.min_price.toLocaleString()} - ${hotel.price_range.max_price.toLocaleString()} {hotel.price_range.currency}
+                ${hotel.price_range && hotel.price_range.min_price ? hotel.price_range.min_price.toLocaleString() : '0'} - ${hotel.price_range && hotel.price_range.max_price ? hotel.price_range.max_price.toLocaleString() : '0'} {hotel.price_range && hotel.price_range.currency ? hotel.price_range.currency : 'ARS'}
               </div>
 
               {/* Información de búsqueda */}

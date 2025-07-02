@@ -1,36 +1,29 @@
-# Build stage
+# MODIFICAR hotel-service/Dockerfile
+
 FROM golang:1.24-alpine AS builder
 
 WORKDIR /app
-
-# Instalar dependencias del sistema
-RUN apk add --no-cache git ca-certificates
-
-# Copiar archivos de dependencias
 COPY go.mod go.sum ./
-
-# Descargar dependencias
 RUN go mod download
 
-# Copiar código fuente
 COPY . .
+RUN go build -o main ./cmd/server
 
-# Compilar la aplicación
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main ./cmd/server
-
-# Production stage
 FROM alpine:latest
 
-# Instalar certificados SSL
-RUN apk --no-cache add ca-certificates tzdata
+# Instalar ca-certificates para HTTPS
+RUN apk --no-cache add ca-certificates
 
-WORKDIR /root/
+WORKDIR /app/
 
-# Copiar el binario compilado
+# Crear directorio para uploads
+RUN mkdir -p uploads/hotels
+
+# Copiar binario
 COPY --from=builder /app/main .
 
 # Exponer puerto
 EXPOSE 8080
 
-# Comando para ejecutar la aplicación
+# Ejecutar aplicación
 CMD ["./main"]

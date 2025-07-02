@@ -48,13 +48,19 @@ func (s *BookingService) RegisterUser(req *models.RegisterRequest) (*models.User
 		return nil, fmt.Errorf("error hasheando password: %v", err)
 	}
 
-	// Insertar usuario
+	// Insertar usuario - MODIFICADO: agregado role
 	query := `
-		INSERT INTO users (email, password_hash, first_name, last_name, phone, date_of_birth)
-		VALUES (?, ?, ?, ?, ?, ?)
+		INSERT INTO users (email, password_hash, first_name, last_name, phone, date_of_birth, role)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
 	`
 	
-	result, err := s.db.Exec(query, req.Email, string(hashedPassword), req.FirstName, req.LastName, req.Phone, req.DateOfBirth)
+	// Establecer role por defecto si no se proporciona
+	role := req.Role
+	if role == "" {
+		role = "user" // Valor por defecto
+	}
+	
+	result, err := s.db.Exec(query, req.Email, string(hashedPassword), req.FirstName, req.LastName, req.Phone, req.DateOfBirth, role)
 	if err != nil {
 		// Manejo específico de errores MySQL
 		if strings.Contains(err.Error(), "Duplicate entry") || strings.Contains(err.Error(), "duplicate key") {
@@ -95,17 +101,17 @@ func (s *BookingService) LoginUser(req *models.LoginRequest) (*models.User, stri
 	return user, token, nil
 }
 
-// GetUserByID obtiene un usuario por ID
+// GetUserByID obtiene un usuario por ID - MODIFICADO: agregado role
 func (s *BookingService) GetUserByID(userID int) (*models.User, error) {
 	query := `
-		SELECT id, email, password_hash, first_name, last_name, phone, date_of_birth, created_at, updated_at, is_active
+		SELECT id, email, password_hash, first_name, last_name, phone, date_of_birth, role, created_at, updated_at, is_active
 		FROM users WHERE id = ? AND is_active = TRUE
 	`
 
 	var user models.User
 	err := s.db.QueryRow(query, userID).Scan(
 		&user.ID, &user.Email, &user.PasswordHash, &user.FirstName, &user.LastName,
-		&user.Phone, &user.DateOfBirth, &user.CreatedAt, &user.UpdatedAt, &user.IsActive,
+		&user.Phone, &user.DateOfBirth, &user.Role, &user.CreatedAt, &user.UpdatedAt, &user.IsActive,
 	)
 
 	if err != nil {
@@ -118,17 +124,17 @@ func (s *BookingService) GetUserByID(userID int) (*models.User, error) {
 	return &user, nil
 }
 
-// GetUserByEmail obtiene un usuario por email
+// GetUserByEmail obtiene un usuario por email - MODIFICADO: agregado role
 func (s *BookingService) GetUserByEmail(email string) (*models.User, error) {
 	query := `
-		SELECT id, email, password_hash, first_name, last_name, phone, date_of_birth, created_at, updated_at, is_active
+		SELECT id, email, password_hash, first_name, last_name, phone, date_of_birth, role, created_at, updated_at, is_active
 		FROM users WHERE email = ? AND is_active = TRUE
 	`
 
 	var user models.User
 	err := s.db.QueryRow(query, email).Scan(
 		&user.ID, &user.Email, &user.PasswordHash, &user.FirstName, &user.LastName,
-		&user.Phone, &user.DateOfBirth, &user.CreatedAt, &user.UpdatedAt, &user.IsActive,
+		&user.Phone, &user.DateOfBirth, &user.Role, &user.CreatedAt, &user.UpdatedAt, &user.IsActive,
 	)
 
 	if err != nil {
@@ -236,7 +242,7 @@ func (s *BookingService) createSimulatedAvailability(req *models.AvailabilityReq
 	return response
 }
 
-// CreateBooking crea una nueva reserva
+// CreateBooking crea una nueva reserva - VERSIÓN CORREGIDA
 func (s *BookingService) CreateBooking(userID int, req *models.CreateBookingRequest) (*models.Booking, error) {
 	// Verificar disponibilidad primero
 	availReq := &models.AvailabilityRequest{
@@ -255,10 +261,10 @@ func (s *BookingService) CreateBooking(userID int, req *models.CreateBookingRequ
 		return nil, fmt.Errorf("hotel no disponible para las fechas seleccionadas")
 	}
 
-	// Crear reserva en base de datos
+	// Crear reserva en base de datos - CORREGIDO: agregado status = 'confirmed' desde el inicio
 	query := `
-		INSERT INTO bookings (user_id, internal_hotel_id, check_in_date, check_out_date, guests, room_type, total_price, currency, special_requests, booking_reference)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO bookings (user_id, internal_hotel_id, check_in_date, check_out_date, guests, room_type, total_price, currency, status, special_requests, booking_reference)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?)
 	`
 
 	// Generar referencia de reserva
@@ -283,7 +289,7 @@ func (s *BookingService) CreateBooking(userID int, req *models.CreateBookingRequ
 		return nil, fmt.Errorf("error obteniendo ID de reserva: %v", err)
 	}
 
-	// Intentar crear reserva en Amadeus (opcional)
+	// Intentar crear reserva en Amadeus en background (opcional, no afecta el status)
 	go func() {
 		amadeusHotelID, err := s.getAmadeusHotelID(req.HotelID)
 		if err == nil {
@@ -293,8 +299,8 @@ func (s *BookingService) CreateBooking(userID int, req *models.CreateBookingRequ
 			
 			amadeusBookingID, err := s.amadeusClient.CreateBooking(amadeusHotelID, guestInfo)
 			if err == nil {
-				// Actualizar reserva con ID de Amadeus
-				s.db.Exec("UPDATE bookings SET amadeus_booking_id = ?, status = 'confirmed' WHERE id = ?", amadeusBookingID, bookingID)
+				// Solo actualizar el amadeus_booking_id, el status ya es 'confirmed'
+				s.db.Exec("UPDATE bookings SET amadeus_booking_id = ? WHERE id = ?", amadeusBookingID, bookingID)
 			}
 		}
 	}()
@@ -431,4 +437,45 @@ func (s *BookingService) ValidateJWTToken(tokenString string) (int, error) {
 	}
 
 	return int(userID), nil
+}
+
+// ValidateJWTTokenWithRole valida un token JWT y devuelve userID y role
+func (s *BookingService) ValidateJWTTokenWithRole(tokenString string) (int, string, error) {
+	// Parsear token
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		// Verificar método de firma
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("método de firma inesperado: %v", token.Header["alg"])
+		}
+		return []byte(s.jwtSecret), nil
+	})
+
+	if err != nil {
+		return 0, "", fmt.Errorf("error parseando token: %v", err)
+	}
+
+	// Verificar que el token sea válido
+	if !token.Valid {
+		return 0, "", fmt.Errorf("token inválido")
+	}
+
+	// Extraer claims
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return 0, "", fmt.Errorf("claims inválidos")
+	}
+
+	// Obtener user_id
+	userID, ok := claims["user_id"].(float64)
+	if !ok {
+		return 0, "", fmt.Errorf("user_id inválido en token")
+	}
+
+	// Obtener el usuario para verificar su rol actual
+	user, err := s.GetUserByID(int(userID))
+	if err != nil {
+		return 0, "", fmt.Errorf("usuario no encontrado: %v", err)
+	}
+
+	return int(userID), string(user.Role), nil
 }

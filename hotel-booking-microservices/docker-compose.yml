@@ -1,6 +1,5 @@
-version: '3.8'
-
 services:
+  # ============= BASES DE DATOS =============
   mongodb:
     image: mongo:6.0
     container_name: hotel_mongodb
@@ -14,6 +13,12 @@ services:
       - mongodb_data:/data/db
     networks:
       - hotel_network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   mysql:
     image: mysql:8.0
@@ -25,12 +30,23 @@ services:
       MYSQL_DATABASE: booking_db
       MYSQL_USER: booking_user
       MYSQL_PASSWORD: booking_pass
+      # ✅ AGREGADO: Permitir conexiones remotas
+      MYSQL_ROOT_HOST: '%'
     volumes:
       - mysql_data:/var/lib/mysql
       - ./booking-service/sql:/docker-entrypoint-initdb.d
     networks:
       - hotel_network
+    # ✅ AGREGADO: Comando para configurar MySQL correctamente
+    command: --default-authentication-plugin=mysql_native_password --bind-address=0.0.0.0
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
+  # ============= MESSAGING Y SEARCH =============
   rabbitmq:
     image: rabbitmq:3.11-management
     container_name: hotel_rabbitmq
@@ -44,6 +60,12 @@ services:
       - rabbitmq_data:/var/lib/rabbitmq
     networks:
       - hotel_network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
 
   solr:
     image: solr:9.2
@@ -57,7 +79,14 @@ services:
     command: solr-precreate hotels
     networks:
       - hotel_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8983/solr/hotels/admin/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
 
+  # ============= CACHE =============
   memcached:
     image: memcached:1.6-alpine
     container_name: hotel_memcached
@@ -65,21 +94,40 @@ services:
       - "11211:11211"
     networks:
       - hotel_network
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "11211"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
 
+  # ============= MICROSERVICIOS =============
   hotel-service:
     build: ./hotel-service
     container_name: hotel_service
     ports:
-      - "8001:8080"
+      - "8001:8080"  # Puerto externo 8001, interno 8080
     environment:
       - MONGODB_URI=mongodb://admin:password123@mongodb:27017/hotels_db?authSource=admin
       - RABBITMQ_URI=amqp://admin:admin123@rabbitmq:5672/
       - PORT=8080
-    depends_on:
-      - mongodb
-      - rabbitmq
+    volumes:
+      # Volumen para persistir imágenes subidas
+      - hotel_uploads:/app/uploads
     networks:
       - hotel_network
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   search-service:
     build: ./search-service
@@ -91,12 +139,17 @@ services:
       - RABBITMQ_URI=amqp://admin:admin123@rabbitmq:5672/
       - HOTEL_SERVICE_URI=http://hotel-service:8080
       - PORT=8080
-    depends_on:
-      - solr
-      - rabbitmq
-      - hotel-service
     networks:
       - hotel_network
+    depends_on:
+      solr:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      hotel-service:
+        condition: service_started
+    restart: unless-stopped
+    # HEALTHCHECK REMOVIDO TEMPORALMENTE
 
   booking-service:
     build: ./booking-service
@@ -106,19 +159,44 @@ services:
     environment:
       - MYSQL_URI=booking_user:booking_pass@tcp(mysql:3306)/booking_db
       - MEMCACHED_URI=memcached:11211
+      - HOTEL_SERVICE_URI=http://hotel-service:8080
       - PORT=8080
       - JWT_SECRET=mi-secreto-super-seguro-2024
-    depends_on:
-      - mysql
-      - memcached
     networks:
       - hotel_network
+    depends_on:
+      mysql:
+        condition: service_healthy
+      memcached:
+        condition: service_healthy
+      hotel-service:
+        condition: service_started
+    restart: unless-stopped
+    # HEALTHCHECK REMOVIDO TEMPORALMENTE
+
+  # ============= FRONTEND =============
+  frontend:
+    build: ./frontend
+    container_name: hotel_frontend
+    ports:
+      - "3000:80"  # Nginx runs on port 80 inside container
+    environment:
+      - REACT_APP_HOTEL_SERVICE=http://localhost:8001
+      - REACT_APP_SEARCH_SERVICE=http://localhost:8002
+      - REACT_APP_BOOKING_SERVICE=http://localhost:8003
+    networks:
+      - hotel_network
+    depends_on:
+      - hotel-service
+      - search-service
+      - booking-service
 
 volumes:
   mongodb_data:
   mysql_data:
   rabbitmq_data:
   solr_data:
+  hotel_uploads:  # Volumen para imágenes de hoteles
 
 networks:
   hotel_network:
